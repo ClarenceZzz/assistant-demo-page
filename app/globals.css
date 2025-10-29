@@ -1,0 +1,32 @@
+:root {
+  color-scheme: dark;
+  font-family: "Familjen Grotesk", "SF Pro Display", "SF Pro Text", -apple-system,
+    BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  background-color: #0d0d0d;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 40px 16px;
+  background-color: #0d0d0d;
+  color: #d9d9d9;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
