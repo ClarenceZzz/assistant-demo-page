@@ -14,8 +14,23 @@ const QUESTIONS = [
 
 const MODELS = ["GPT 4.1 mini", "GPT 4.1", "GPT-4o", "GPT-4.1 Flash"] as const;
 
+const USER_ID_STORAGE_KEY = "assistant-demo-user-id";
+const SESSION_ID_STORAGE_KEY = "assistant-demo-session-id";
+const DEFAULT_USER_ID = "1";
+const DEFAULT_SESSION_ID = "4";
+const DEFAULT_RAG_ENDPOINT = "/api/rag/query";
+const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
+const RAG_QUERY_URL = apiBaseUrl
+  ? `${apiBaseUrl.replace(/\/$/, "")}/api/v1/rag/query`
+  : DEFAULT_RAG_ENDPOINT;
+
 type ChipOption = "deep" | "search";
 type MessageRole = "user" | "assistant";
+
+type MessageReference = {
+  title: string;
+  section?: string | null;
+};
 
 type ConversationMessage = {
   id: string;
@@ -25,12 +40,14 @@ type ConversationMessage = {
   status?: "pending" | "error" | "done";
   heading?: string;
   footnote?: string | null;
+  references?: MessageReference[];
 };
 
 type MessageOptions = {
   status?: ConversationMessage["status"];
   heading?: string;
   footnote?: string | null;
+  references?: ConversationMessage["references"];
 };
 
 type ComposerProps = {
@@ -41,12 +58,16 @@ type ComposerProps = {
   onChipToggle: (chip: ChipOption) => void;
   selectedModel: typeof MODELS[number];
   onModelChange: (model: typeof MODELS[number]) => void;
-  isWaiting: boolean;
 };
 
 type MessageListProps = {
   messages: ConversationMessage[];
   isWaiting: boolean;
+};
+
+type SendMessageResult = {
+  answer: string;
+  references: MessageReference[];
 };
 
 const formatRelativeTime = (createdAt: number) => {
@@ -68,7 +89,8 @@ const createMessage = (role: MessageRole, content: string, options: MessageOptio
   createdAt: Date.now(),
   status: options.status ?? "done",
   heading: options.heading,
-  footnote: options.footnote
+  footnote: options.footnote,
+  references: options.references
 });
 
 const ASSISTANT_DEFAULT_FOOTNOTE =
@@ -76,27 +98,34 @@ const ASSISTANT_DEFAULT_FOOTNOTE =
 
 function AssistantMessage({ message }: { message: ConversationMessage }) {
   const footnote = message.footnote === undefined ? ASSISTANT_DEFAULT_FOOTNOTE : message.footnote;
-  const showActions = message.footnote === undefined;
   const showGlow = message.footnote === undefined;
+  const referencesText =
+    message.references?.length
+      ? message.references
+          .map(({ title, section }) =>
+            [title, section].filter((value) => value && value.trim().length > 0).join(" - ")
+          )
+          .join("；")
+      : undefined;
 
   return (
     <article className={styles.assistantMessage}>
       {showGlow && <div className={styles.assistantGlow} aria-hidden="true" />}
-      {message.heading && <h2 className={styles.assistantTitle}>{message.heading}</h2>}
-      <div className={styles.assistantCard}>
-        <p className={styles.assistantCardText}>{message.content}</p>
-      </div>
-      {footnote && <p className={styles.assistantDescription}>{footnote}</p>}
-      {showActions && (
-        <div className={styles.assistantActions} aria-hidden="true">
-          <Image src="/assets/assistant-tools-idea.svg" alt="" width={16} height={16} />
-          <Image src="/assets/assistant-tools-send.svg" alt="" width={16} height={16} />
-          <Image src="/assets/assistant-tools-bookmark.svg" alt="" width={16} height={16} />
-          <div className={styles.assistantMore}>
-            <Image src="/assets/assistant-tools-more.svg" alt="" width={16} height={16} />
-          </div>
+      <p className={styles.assistantTitle}>{message.content}</p>
+      {referencesText && (
+        <div className={styles.assistantCard}>
+          <p className={styles.assistantCardText}>{referencesText}</p>
         </div>
       )}
+      {footnote && <p className={styles.assistantDescription}>{footnote}</p>}
+      <div className={styles.assistantActions} aria-hidden="true">
+        <Image src="/assets/assistant-tools-idea.svg" alt="" width={16} height={16} />
+        <Image src="/assets/assistant-tools-send.svg" alt="" width={16} height={16} />
+        <Image src="/assets/assistant-tools-bookmark.svg" alt="" width={16} height={16} />
+        <div className={styles.assistantMore}>
+          <Image src="/assets/assistant-tools-more.svg" alt="" width={16} height={16} />
+        </div>
+      </div>
     </article>
   );
 }
@@ -143,10 +172,9 @@ function Composer({
   chips,
   onChipToggle,
   selectedModel,
-  onModelChange,
-  isWaiting
+  onModelChange
 }: ComposerProps) {
-  const canSend = prompt.trim().length > 0 && !isWaiting;
+  const canSend = prompt.trim().length > 0;
 
   return (
     <section className={styles.voiceCard} aria-labelledby="voice-title">
@@ -262,7 +290,40 @@ export default function Home() {
   });
   const [selectedModel, setSelectedModel] = useState<typeof MODELS[number]>(MODELS[0]);
   const [messages, setMessages] = useState<ConversationMessage[]>([]);
-  const [isWaiting, setIsWaiting] = useState(false);
+  const [pendingCount, setPendingCount] = useState(0);
+  const userIdRef = useRef<string>(DEFAULT_USER_ID);
+  const sessionIdRef = useRef<string>(DEFAULT_SESSION_ID);
+  const isWaiting = pendingCount > 0;
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const storedUserId = sessionStorage.getItem(USER_ID_STORAGE_KEY);
+    if (storedUserId) {
+      userIdRef.current = storedUserId;
+    } else {
+      sessionStorage.setItem(USER_ID_STORAGE_KEY, DEFAULT_USER_ID);
+    }
+
+    const storedSessionId = sessionStorage.getItem(SESSION_ID_STORAGE_KEY);
+    if (storedSessionId) {
+      sessionIdRef.current = storedSessionId;
+    } else {
+      sessionStorage.setItem(SESSION_ID_STORAGE_KEY, DEFAULT_SESSION_ID);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const textarea = document.getElementById("voice-title") as HTMLTextAreaElement | null;
+    if (textarea) {
+      const restored = textarea.value;
+      if (restored.trim().length > 0) {
+        setPrompt(restored);
+      }
+    }
+  }, []);
 
   const handleQuestionSelect = (question: string) => {
     setPrompt(question);
@@ -282,44 +343,68 @@ export default function Home() {
     }));
   };
 
-  const handleMockReply = useCallback(
-    async (body: string) =>
-      new Promise<string>((resolve) => {
-        setTimeout(() => {
-          resolve(
-            `Here’s a quick take on “${body}”. Drink water, put your phone down, and take a 10-minute power nap. Sometimes you don’t need a solution, you just need a restart.`
-          );
-        }, 1200);
-      }),
-    []
-  );
-
   const sendMessage = useCallback(
-    async (body: string, model: typeof MODELS[number]) => {
-      void model;
-      return handleMockReply(body);
+    async (body: string): Promise<SendMessageResult> => {
+      const payload = {
+        question: body,
+        persona: "客户助手",
+        channel: "app",
+        sessionId: sessionIdRef.current,
+        userId: userIdRef.current
+      };
+
+      const response = await fetch(RAG_QUERY_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        throw new Error(`Request failed: ${response.status}`);
+      }
+
+      const result: {
+        answer?: string;
+        references?: Array<{ title?: string | null; section?: string | null }> | null;
+      } = await response.json();
+      const rawReferences = Array.isArray(result.references) ? result.references : [];
+      const references: MessageReference[] = rawReferences
+        .map((reference) => ({
+          title: reference.title ?? "",
+          section: reference.section ?? null
+        }))
+        .filter((reference) => reference.title.trim().length > 0);
+
+      return {
+        answer: result.answer?.trim() ?? "",
+        references
+      };
     },
-    [handleMockReply]
+    []
   );
 
   const handleSend = useCallback(async () => {
     const trimmed = prompt.trim();
-    if (!trimmed || isWaiting) return;
+    if (!trimmed) return;
 
     const userMessage = createMessage("user", trimmed);
     setMessages((prev) => [...prev, userMessage]);
     setPrompt("");
-    setIsWaiting(true);
+    setPendingCount((prev) => prev + 1);
 
     try {
-      const response = await sendMessage(trimmed, selectedModel);
+      const { answer, references } = await sendMessage(trimmed);
       setMessages((prev) => {
         const hasAssistant = prev.some((msg) => msg.role === "assistant");
+        const content = answer || "抱歉，我暂时无法回答这个问题。";
         return [
           ...prev,
-          createMessage("assistant", response, {
+          createMessage("assistant", content, {
             heading: trimmed,
-            footnote: hasAssistant ? null : undefined
+            footnote: hasAssistant ? null : undefined,
+            references: references.length > 0 ? references : undefined
           })
         ];
       });
@@ -333,9 +418,9 @@ export default function Home() {
         })
       ]);
     } finally {
-      setIsWaiting(false);
+      setPendingCount((prev) => Math.max(prev - 1, 0));
     }
-  }, [isWaiting, prompt, selectedModel, sendMessage]);
+  }, [prompt, sendMessage]);
 
   const hasConversation = messages.length > 0;
   const deviceClassName = [styles.device, hasConversation ? styles.deviceConversation : ""]
@@ -427,7 +512,6 @@ export default function Home() {
           onChipToggle={handleChipToggle}
           selectedModel={selectedModel}
           onModelChange={setSelectedModel}
-          isWaiting={isWaiting}
         />
       </div>
     </main>
