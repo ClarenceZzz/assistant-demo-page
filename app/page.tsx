@@ -63,6 +63,7 @@ type ComposerProps = {
 type MessageListProps = {
   messages: ConversationMessage[];
   isWaiting: boolean;
+  onRetry: (message: ConversationMessage) => void;
 };
 
 type SendMessageResult = {
@@ -96,41 +97,70 @@ const createMessage = (role: MessageRole, content: string, options: MessageOptio
 const ASSISTANT_DEFAULT_FOOTNOTE =
   "Need more? I got hacks for productivity, food, dating, saving money—you name it.";
 
-function AssistantMessage({ message }: { message: ConversationMessage }) {
+const noop = () => {};
+
+type AssistantMessageProps = {
+  message: ConversationMessage;
+  onRetry?: (message: ConversationMessage) => void;
+};
+
+function AssistantMessage({ message, onRetry }: AssistantMessageProps) {
   const footnote = message.footnote === undefined ? ASSISTANT_DEFAULT_FOOTNOTE : message.footnote;
   const showGlow = message.footnote === undefined;
-  const referencesText =
+  const referencesList =
     message.references?.length
-      ? message.references
-          .map(({ title, section }) =>
-            [title, section].filter((value) => value && value.trim().length > 0).join(" - ")
-          )
-          .join("；")
+      ? message.references.map(({ title, section }) =>
+          [title, section].filter((value) => value && value.trim().length > 0).join(" - ")
+        )
       : undefined;
 
   return (
     <article className={styles.assistantMessage}>
       {showGlow && <div className={styles.assistantGlow} aria-hidden="true" />}
       <p className={styles.assistantTitle}>{message.content}</p>
-      {referencesText && (
-        <div className={styles.assistantCard}>
-          <p className={styles.assistantCardText}>{referencesText}</p>
-        </div>
-      )}
+      {referencesList &&
+        referencesList.map((reference, index) => (
+          <div key={`${reference}-${index}`} className={styles.assistantCard}>
+            <div className={styles.assistantCardText} title={reference}>
+              {reference}
+            </div>
+          </div>
+        ))}
       {footnote && <p className={styles.assistantDescription}>{footnote}</p>}
-      <div className={styles.assistantActions} aria-hidden="true">
-        <Image src="/assets/assistant-tools-idea.svg" alt="" width={16} height={16} />
-        <Image src="/assets/assistant-tools-send.svg" alt="" width={16} height={16} />
-        <Image src="/assets/assistant-tools-bookmark.svg" alt="" width={16} height={16} />
-        <div className={styles.assistantMore}>
-          <Image src="/assets/assistant-tools-more.svg" alt="" width={16} height={16} />
-        </div>
+      <div className={styles.assistantActions}>
+        <button
+          type="button"
+          className={styles.assistantActionButton}
+          onClick={noop}
+          aria-label="查看更多灵感"
+        >
+          <Image src="/assets/assistant-tools-idea.svg" alt="" width={16} height={16} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className={styles.assistantActionButton}
+          onClick={noop}
+          aria-label="再次发送"
+        >
+          <Image src="/assets/assistant-tools-send.svg" alt="" width={16} height={16} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className={styles.assistantActionButton}
+          onClick={() => onRetry?.(message)}
+          aria-label="重新发送请求"
+        >
+          <Image src="/assets/assistant-tools-bookmark.svg" alt="" width={16} height={16} aria-hidden="true" />
+        </button>
+        <button type="button" className={styles.assistantActionButton} onClick={noop} aria-label="更多操作">
+          <Image src="/assets/assistant-tools-more.svg" alt="" width={16} height={16} aria-hidden="true" />
+        </button>
       </div>
     </article>
   );
 }
 
-function MessageList({ messages, isWaiting }: MessageListProps) {
+function MessageList({ messages, isWaiting, onRetry }: MessageListProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -147,7 +177,7 @@ function MessageList({ messages, isWaiting }: MessageListProps) {
     <div ref={scrollRef} className={styles.chatScrollArea} aria-live="polite">
       {messages.map((message) =>
         message.role === "assistant" ? (
-          <AssistantMessage key={message.id} message={message} />
+          <AssistantMessage key={message.id} message={message} onRetry={onRetry} />
         ) : (
           <div key={message.id} className={`${styles.messageGroup} ${styles.messageGroupUser}`}>
             <p className={`${styles.messageBubble} ${styles.messageBubbleUser}`}>{message.content}</p>
@@ -385,42 +415,62 @@ export default function Home() {
     []
   );
 
-  const handleSend = useCallback(async () => {
+  const submitPrompt = useCallback(
+    async (rawPrompt: string) => {
+      const trimmed = rawPrompt.trim();
+      if (!trimmed) return;
+
+      const userMessage = createMessage("user", trimmed);
+      setMessages((prev) => [...prev, userMessage]);
+      setPendingCount((prev) => prev + 1);
+
+      try {
+        const { answer, references } = await sendMessage(trimmed);
+        setMessages((prev) => {
+          const hasAssistant = prev.some((msg) => msg.role === "assistant");
+          const content = answer || "抱歉，我暂时无法回答这个问题。";
+          return [
+            ...prev,
+            createMessage("assistant", content, {
+              heading: trimmed,
+              footnote: hasAssistant ? null : undefined,
+              references: references.length > 0 ? references : undefined
+            })
+          ];
+        });
+      } catch (error) {
+        setMessages((prev) => [
+          ...prev,
+          createMessage("assistant", "Something went wrong. Please try again.", {
+            status: "error",
+            heading: trimmed,
+            footnote: "Let me know if you want to try again."
+          })
+        ]);
+      } finally {
+        setPendingCount((prev) => Math.max(prev - 1, 0));
+      }
+    },
+    [sendMessage]
+  );
+
+  const handleSend = useCallback(() => {
     const trimmed = prompt.trim();
     if (!trimmed) return;
 
-    const userMessage = createMessage("user", trimmed);
-    setMessages((prev) => [...prev, userMessage]);
     setPrompt("");
-    setPendingCount((prev) => prev + 1);
+    void submitPrompt(trimmed);
+  }, [prompt, submitPrompt]);
 
-    try {
-      const { answer, references } = await sendMessage(trimmed);
-      setMessages((prev) => {
-        const hasAssistant = prev.some((msg) => msg.role === "assistant");
-        const content = answer || "抱歉，我暂时无法回答这个问题。";
-        return [
-          ...prev,
-          createMessage("assistant", content, {
-            heading: trimmed,
-            footnote: hasAssistant ? null : undefined,
-            references: references.length > 0 ? references : undefined
-          })
-        ];
-      });
-    } catch (error) {
-      setMessages((prev) => [
-        ...prev,
-        createMessage("assistant", "Something went wrong. Please try again.", {
-          status: "error",
-          heading: trimmed,
-          footnote: "Let me know if you want to try again."
-        })
-      ]);
-    } finally {
-      setPendingCount((prev) => Math.max(prev - 1, 0));
-    }
-  }, [prompt, sendMessage]);
+  const handleRetry = useCallback(
+    (message: ConversationMessage) => {
+      const originalPrompt = message.heading?.trim();
+      if (!originalPrompt) return;
+
+      void submitPrompt(originalPrompt);
+    },
+    [submitPrompt]
+  );
 
   const hasConversation = messages.length > 0;
   const deviceClassName = [styles.device, hasConversation ? styles.deviceConversation : ""]
@@ -461,7 +511,7 @@ export default function Home() {
 
         <div className={styles.chatArea}>
           {hasConversation ? (
-            <MessageList messages={messages} isWaiting={isWaiting} />
+            <MessageList messages={messages} isWaiting={isWaiting} onRetry={handleRetry} />
           ) : (
             <>
               <section className={styles.hero} aria-labelledby="hero-title">
